@@ -24,7 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'vision_node = machine_vision_pkg.vision_node:main'
+            'vision_node = machine_vision_pkg.vision_node:main',
+            'apriltag_viewer = machine_vision_pkg.apriltag_viewer:main',
         ],
     },
 )
