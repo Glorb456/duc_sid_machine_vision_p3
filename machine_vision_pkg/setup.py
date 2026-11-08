@@ -1,12 +1,7 @@
 from setuptools import find_packages, setup
 import os
 from glob import glob
-data_files=[
-    ('share/ament_index/resource_index/packages',
-        ['resource/' + package_name]),
-    ('share/' + package_name, ['package.xml']),
-    (os.path.join('share', package_name, 'config'), glob('config/*.npz')),
-],
+
 package_name = 'machine_vision_pkg'
 
 setup(
@@ -17,6 +12,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'config'), glob('config/*.npz')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
