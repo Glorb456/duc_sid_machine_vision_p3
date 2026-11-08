@@ -113,6 +113,12 @@ class BallPursuitNode(Node):
             self.get_parameter('target_x').value,
             self.get_parameter('target_y').value,
         )
+        # "Scored" means the ball lands anywhere within this radius of the
+        # target, not exactly on top of it -- the target is the tag's exact
+        # point, but tune-able live without a rebuild since we'll want to
+        # adjust this by feel once testing against the real goal.
+        self.declare_parameter('goal_area_radius', 0.5)
+        self.goal_area_radius = self.get_parameter('goal_area_radius').value
 
         self.bridge = CvBridge()
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
@@ -248,8 +254,10 @@ class BallPursuitNode(Node):
         push_dx = target_x - ball_x
         push_dy = target_y - ball_y
         push_dist = math.hypot(push_dx, push_dy)
-        if push_dist < 1e-6:
-            # ball is already on the target, nothing useful to push toward
+        if push_dist < self.goal_area_radius:
+            # ball is already within the goal area, no more pushing needed.
+            # (Also covers push_dist == 0, where push_dir below would be
+            # undefined.)
             cmd.linear.x = 0.0
             cmd.angular.z = 0.0
             self.cmd_pub.publish(cmd)
