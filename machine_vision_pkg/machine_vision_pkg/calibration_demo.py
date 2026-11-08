@@ -1,6 +1,18 @@
+import os
 import numpy as np
 import cv2 as cv
 import glob
+import argparse
+
+#file saving
+PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--images', default=os.path.join(PKG_ROOT, 'calibration_images'))
+parser.add_argument('--out', default=os.path.join(PKG_ROOT, 'config', 'calibration.npz'))
+parser.add_argument('--rows', type=int, default=7, help='inner corners per column')
+parser.add_argument('--cols', type=int, default=10, help='inner corners per row')
+args = parser.parse_args()
 
 # termination criteria
 criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -17,13 +29,11 @@ images = glob.glob('images/*.jpg')
 
 for fname in images:
     img = cv.imread(fname)
-    print("helo")
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
     # Find the chess board corners
     ret, corners = cv.findChessboardCorners(gray, (7,10), None)
     print(ret)
-    print(corners)
 
     # If found, add object points, image points (after refining them)
     if ret == True:
@@ -39,21 +49,26 @@ for fname in images:
 
 cv.destroyAllWindows()
 
+if len(objpoints) < 10:
+    raise SystemExit(f'only {len(objpoints)} boards detected in {len(images)} images; need 10+')
+
 ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
 
-img = cv.imread('images/calib.jpg')
+#saves images to a .npz file
 h,  w = img.shape[:2]
-newcameramtx, roi = cv.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
+np.savez('images', mtx=mtx, dist=dist, width=w, height=h)
 
-# undistort
-dst = cv.undistort(img, mtx, dist, None, newcameramtx)
+# img = cv.imread('images/calib.jpg')
+# h,  w = img.shape[:2]
+# newcameramtx, roi = cv.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
 
-# crop the image
-x, y, w, h = roi
-dst = dst[y:y+h, x:x+w]
-cv.imwrite('calibresult.png', dst)
+# # undistort
+# dst = cv.undistort(img, mtx, dist, None, newcameramtx)
 
-
+# # crop the image
+# x, y, w, h = roi
+# dst = dst[y:y+h, x:x+w]
+# cv.imwrite('calibresult.png', dst)
 
 mean_error = 0
 for i in range(len(objpoints)):

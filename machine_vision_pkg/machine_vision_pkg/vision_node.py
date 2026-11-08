@@ -60,7 +60,7 @@ BALL_SIZE_CALIBRATION = 61.0
 # K matrix), used to turn a pixel offset from image-center into a
 # bearing angle via atan2(offset, focal_length). Pulled directly from
 # this sim's camera_info; re-check it if the camera model changes.
-CAMERA_FOCAL_LENGTH_PX = 610.18
+CAMERA_FOCAL_LENGTH_PX = 610.18 # TODO make this pull from calibration or other method
 
 STANDOFF_DISTANCE = 0.35  # meters behind the ball to line up before striking
 SETUP_POSITION_TOLERANCE = 0.1  # meters, "close enough" to the setup point
@@ -102,7 +102,8 @@ class BallPursuitNode(Node):
 
         self.bridge = CvBridge()
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.create_subscription(Image, 'camera/image', self.image_callback, 10)
+        #camera/image is sim, image_raw is neato
+        self.create_subscription(Image, 'camera/image_raw', self.image_callback, 10)
         self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
 
         self.robot_pose = None  # (x, y, yaw) in odom frame

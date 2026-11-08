@@ -1,4 +1,5 @@
 import math
+import os
 import numpy as np
 import cv2 
 import apriltag
@@ -7,6 +8,8 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, Pose2D, Point
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
+from ament_index_python.packages import get_package_share_directory
+path = os.path.join(get_package_share_directory('machine_vision_pkg'), 'config', 'calibration.npz')
 
 
 class localization_node(Node):
@@ -21,7 +24,7 @@ class localization_node(Node):
 
 
 
-        #measured parameters
+        #measured parameters in ft, need to translate to meters
         self.FIELD_SIZE = 4.0
         self.TAG_SIZE = 0.246063
         self.TAG_HEIGHT = 0.2083333
@@ -53,7 +56,10 @@ class localization_node(Node):
 
 
         self.create_subscription(Image, '/camera/image_raw', self.process_image, 10)
-        self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10) #TODO communicate with other node
+        # self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+        self.publisher_ = self.create_publisher(Vector3, 'pose', 10) #need to publish x,y,theta, this is probably wrong
+        self.timer = self.create_timer(1.0, self.timer_callback)
+
 
     def process_image(self, msg):
         # ros image to bgr numpy array
@@ -68,8 +74,8 @@ class localization_node(Node):
         # cv2.imshow('camera', self.cv_image)
         # cv2.waitKey(1)
     
-    def detect_apriltag(self, self.cv_image):
-        ##returns all apriltag ids (dictionary keys)
+    def detect_apriltag(self, cv_image):
+        #returns all apriltag ids (dictionary keys)
         grayscale = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY)
         result = []
         for d in self.detector.detect(grayscale):
@@ -90,7 +96,7 @@ class localization_node(Node):
         return math.sqrt(max(dist**2 - height_diff**2, 0.0))
                 
 
-    def estimate_location(self):
+    def estimate_location(self, detections):
         # TODO 4 april tags are in each corner of field, 1 april tag per goal. field is a square
         pass
 
@@ -107,7 +113,7 @@ class localization_node(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = vision_node()
+    node = localization_node()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
