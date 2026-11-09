@@ -11,6 +11,8 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Bool
 from cv_bridge import CvBridge
 
+from machine_vision_pkg import field_config
+
 # calibration.npz lives in the same folder as this file (written by calibration_demo.py)
 CALIB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'calibration.npz')
 
@@ -25,30 +27,20 @@ class localization_node(Node):
 
 
 
-        #measured parameters, all in meters 
-        self.FIELD_SIZE = 1.8288      # 6 ft
-        self.TAG_SIZE = 0.075
-        self.TAG_HEIGHT = 0.0635
-        self.CAMERA_HEIGHT = 0.2667
+        #measured parameters, all in meters -- shared with vision_node.py via
+        #field_config.py so the two nodes can't silently disagree about the field
+        self.FIELD_SIZE = field_config.FIELD_SIZE
+        self.TAG_SIZE = field_config.TAG_SIZE
+        self.TAG_HEIGHT = field_config.TAG_HEIGHT
+        self.CAMERA_HEIGHT = field_config.CAMERA_HEIGHT
 
         #boost: if within BOOST_RADIUS of field center, robot may speed up for BOOST_TIME
-        self.CENTER = self.FIELD_SIZE / 2
+        self.CENTER = field_config.CENTER
         self.BOOST_RADIUS = 0.10
         self.BOOST_TIME = Duration(seconds=3.0)
 
-        #tag dict
-        self.TAG_POSITIONS = {
-
-            #corners
-            0: (0.0, 0.0),
-            1: (self.FIELD_SIZE, 0.0),
-            2: (self.FIELD_SIZE, self.FIELD_SIZE),
-            3: (0.0, self.FIELD_SIZE),
-
-            #goals
-            4: (0.0, self.FIELD_SIZE/2), 
-            5: (self.FIELD_SIZE, self.FIELD_SIZE/2)
-        }
+        #tag dict: corners 0-3, goals 4-5
+        self.TAG_POSITIONS = field_config.TAG_POSITIONS
 
         #loads calibration
         calib = np.load(CALIB_PATH)

@@ -24,25 +24,34 @@ which shifted the setup point, which commanded more turning, which added
 more heading error, and so on until the robot spiraled away from the
 ball entirely. Locking the estimate once removes that loop outright.
 
-The target point defaults to a fixed (x, y) parameter in the odom frame,
-but is overridden permanently the first time AprilTag #4 (the goal) is
-spotted: its world position gets the exact same lock-once treatment as
-the ball, for the same reason (the goal doesn't move either). Detection
-uses OpenCV's built-in `cv2.aruco` AprilTag support, not the separate
-`apriltag` pip package `localization_node.py` uses, so this file has no
-extra dependency beyond what it already imports.
+The target point is NOT detected live by this node -- it's looked up from
+field_config.TAG_POSITIONS, the same known tag map localization_node.py
+uses to triangulate the robot's position in the first place. Once you trust
+a localization system built on fixed, known landmarks, the goal's position
+stops being something to estimate: it's just a constant. (An earlier
+version of this file detected AprilTag #4 itself with cv2.aruco + solvePnP,
+before localization_node.py existed. That approach still works and is
+worth knowing about, but it duplicated geometry localization_node.py
+already has more precisely, from a map it already trusts.)
+
+This node's own sense of "where am I" also comes from localization_node.py
+now, not odom: it subscribes to the Pose2D it publishes on 'pose', which is
+only updated when a tag is in view. Odom drifts without bound; this doesn't,
+but it also doesn't update at all while no tag is visible, so robot_pose can
+go stale for stretches in the middle of the field. There's no fallback to
+odom here -- matching how localization_node.py itself has no fallback.
 """
 
 import math
 
 import cv2
-import numpy as np
 import rclpy
 from cv_bridge import CvBridge
-from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Pose2D, Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+
+from machine_vision_pkg import field_config
 
 # --- tune these against your actual ball and camera before trusting any of this ---
 
@@ -71,14 +80,9 @@ BALL_SIZE_CALIBRATION = 61.0
 # this sim's camera_info; re-check it if the camera model changes.
 CAMERA_FOCAL_LENGTH_PX = 610.18 # TODO make this pull from calibration or other method
 
-# The goal is AprilTag family 36h11, tag ID 4 (see localization_node.py's
-# TAG_POSITIONS: 0-3 are field corners, 4 and 5 are the two goals).
-GOAL_TAG_ID = 4
-GOAL_TAG_FAMILY = cv2.aruco.DICT_APRILTAG_36h11
-# Default edge length of the tag's black square, in meters -- overridable
-# via the goal_tag_size param below without a rebuild. 0.075 is Sid's
-# measurement of the team's actual printed tag.
-DEFAULT_GOAL_TAG_SIZE_M = 0.075
+# Which goal (field_config.TAG_POSITIONS id) to push the ball toward.
+# Overridable via the target_goal_id param below without a rebuild.
+DEFAULT_TARGET_GOAL_ID = 5
 
 STANDOFF_DISTANCE = 0.35  # meters behind the ball to line up before striking
 SETUP_POSITION_TOLERANCE = 0.1  # meters, "close enough" to the setup point
@@ -105,45 +109,29 @@ def angle_diff(a, b):
     return math.atan2(math.sin(d), math.cos(d))
 
 
-def yaw_from_quaternion(q):
-    """Yaw angle from a geometry_msgs/Quaternion, assuming a flat robot."""
-    return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-
-
 class BallPursuitNode(Node):
 
     def __init__(self):
         super().__init__('ball_pursuit_node')
 
-        self.declare_parameter('target_x', 2.0)
-        self.declare_parameter('target_y', 0.0)
-        self.target_xy = (
-            self.get_parameter('target_x').value,
-            self.get_parameter('target_y').value,
-        )
+        self.declare_parameter('target_goal_id', DEFAULT_TARGET_GOAL_ID)
+        target_goal_id = self.get_parameter('target_goal_id').value
+        self.target_xy = field_config.TAG_POSITIONS[target_goal_id]
         # "Scored" means the ball lands anywhere within this radius of the
-        # target, not exactly on top of it -- the target is the tag's exact
-        # point, but tune-able live without a rebuild since we'll want to
-        # adjust this by feel once testing against the real goal.
+        # target, not exactly on top of it -- tune-able live without a
+        # rebuild since we'll want to adjust this by feel once testing
+        # against the real goal.
         self.declare_parameter('goal_area_radius', 0.5)
         self.goal_area_radius = self.get_parameter('goal_area_radius').value
-        self.declare_parameter('goal_tag_size', DEFAULT_GOAL_TAG_SIZE_M)
-        self.goal_tag_size = self.get_parameter('goal_tag_size').value
 
         self.bridge = CvBridge()
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
         #camera/image is sim, image_raw is neato
         self.create_subscription(Image, 'camera/image_raw', self.image_callback, 10)
-        self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
+        self.create_subscription(Pose2D, 'pose', self.pose_callback, 10)
 
-        aruco_params = cv2.aruco.DetectorParameters()
-        aruco_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG
-        self.tag_detector = cv2.aruco.ArucoDetector(
-            cv2.aruco.getPredefinedDictionary(GOAL_TAG_FAMILY), aruco_params)
-
-        self.robot_pose = None  # (x, y, yaw) in odom frame
-        self.locked_ball_xy = None  # (x, y) in odom frame, set once and never recomputed
-        self.locked_goal_xy = None  # (x, y) in odom frame, from AprilTag #4; overrides target_xy once found
+        self.robot_pose = None  # (x, y, yaw) in field frame, from localization_node.py
+        self.locked_ball_xy = None  # (x, y) in field frame, set once and never recomputed
         # A single spurious HSV-match frame (sensor noise, a stray
         # reflection) would otherwise get locked in permanently and the
         # robot would chase a phantom for the rest of the run -- confirmed
@@ -158,14 +146,12 @@ class BallPursuitNode(Node):
 
         self.control_timer = self.create_timer(0.1, self.control_loop)
 
-    def odom_callback(self, msg):
-        pose = msg.pose.pose
-        yaw = yaw_from_quaternion(pose.orientation)
-        self.robot_pose = (pose.position.x, pose.position.y, yaw)
+    def pose_callback(self, msg):
+        self.robot_pose = (msg.x, msg.y, msg.theta)
 
     @staticmethod
     def _project_to_world(x_robot, y_robot, rx, ry, ryaw):
-        """Robot-frame (forward, left) offset -> odom-frame (x, y)."""
+        """Robot-frame (forward, left) offset -> field-frame (x, y)."""
         x = rx + x_robot * math.cos(ryaw) - y_robot * math.sin(ryaw)
         y = ry + x_robot * math.sin(ryaw) + y_robot * math.cos(ryaw)
         return (x, y)
@@ -219,59 +205,13 @@ class BallPursuitNode(Node):
         if self._ball_candidate_hits >= BALL_CONFIRM_FRAMES:
             self.locked_ball_xy = candidate_xy
 
-    def _find_goal_tag(self, frame, rx, ry, ryaw):
-        image_height, image_width = frame.shape[:2]
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = self.tag_detector.detectMarkers(gray)
-        if ids is None:
-            return
-
-        for tag_corners, tag_id in zip(corners, ids.ravel()):
-            if tag_id != GOAL_TAG_ID:
-                continue
-
-            # Full PnP pose solve (not the ball's apparent-size heuristic):
-            # we know the tag's real size, so this gives both bearing and
-            # distance directly from the tag's camera-frame translation.
-            half = self.goal_tag_size / 2.0
-            obj_pts = np.array(
-                [[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]],
-                dtype=np.float32)
-            img_pts = tag_corners.reshape(4, 2)
-            k_matrix = np.array(
-                [[CAMERA_FOCAL_LENGTH_PX, 0, image_width / 2.0],
-                 [0, CAMERA_FOCAL_LENGTH_PX, image_height / 2.0],
-                 [0, 0, 1]], dtype=np.float64)
-
-            ok, _, tvec = cv2.solvePnP(
-                obj_pts, img_pts, k_matrix, np.zeros(5), flags=cv2.SOLVEPNP_IPPE_SQUARE)
-            if not ok:
-                continue
-
-            t = tvec.ravel()
-            # z (depth) -> robot-frame forward, same as the ball's distance.
-            # x (camera-right, positive) -> robot-frame y is NEGATED: image/
-            # camera-rightward is the robot's physical right, which is
-            # NEGATIVE y in the standard x-forward/y-left robot frame that
-            # _project_to_world's rotation assumes. Matches the ball's own
-            # (also negated) bearing-to-lateral conversion above.
-            goal_x_robot, goal_y_robot = float(t[2]), -float(t[0])
-            self.locked_goal_xy = self._project_to_world(goal_x_robot, goal_y_robot, rx, ry, ryaw)
-            return
-
     def image_callback(self, msg):
-        if self.robot_pose is None:
-            return
-        if self.locked_ball_xy is not None and self.locked_goal_xy is not None:
+        if self.robot_pose is None or self.locked_ball_xy is not None:
             return
 
         frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         rx, ry, ryaw = self.robot_pose
-
-        if self.locked_ball_xy is None:
-            self._find_ball(frame, rx, ry, ryaw)
-        if self.locked_goal_xy is None:
-            self._find_goal_tag(frame, rx, ry, ryaw)
+        self._find_ball(frame, rx, ry, ryaw)
 
     def control_loop(self):
         cmd = Twist()
@@ -286,7 +226,7 @@ class BallPursuitNode(Node):
             return
 
         ball_x, ball_y = self.locked_ball_xy
-        target_x, target_y = self.locked_goal_xy if self.locked_goal_xy is not None else self.target_xy
+        target_x, target_y = self.target_xy
         rx, ry, ryaw = self.robot_pose
 
         push_dx = target_x - ball_x
