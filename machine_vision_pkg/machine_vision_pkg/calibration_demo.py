@@ -1,38 +1,32 @@
 import os
 import numpy as np
 import cv2 as cv
-import glob
-import argparse
 
-#file saving
-PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--images', default=os.path.join(PKG_ROOT, 'calibration_images'))
-parser.add_argument('--out', default=os.path.join(PKG_ROOT, 'config', 'calibration.npz'))
-parser.add_argument('--rows', type=int, default=7, help='inner corners per column')
-parser.add_argument('--cols', type=int, default=10, help='inner corners per row')
-args = parser.parse_args()
+# Everything lives next to this file: reads images/*.jpg, writes calibration.npz
+HERE = os.path.dirname(os.path.abspath(__file__))
+IMAGE_DIR = os.path.join(HERE, 'images')
+OUT_PATH = os.path.join(HERE, 'calibration.npz')
+ROWS, COLS = 7, 10  # inner corners of the chessboard
 
 # termination criteria
 criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
 # prepare object points, like (0,0,0), (1,0,0), (2,0,0) ....,(6,5,0)
-objp = np.zeros((10*7,3), np.float32)
-objp[:,:2] = np.mgrid[0:7,0:10].T.reshape(-1,2)
+objp = np.zeros((ROWS*COLS,3), np.float32)
+objp[:,:2] = np.mgrid[0:ROWS,0:COLS].T.reshape(-1,2)
 
 # Arrays to store object points and image points from all the images.
 objpoints = [] # 3d point in real world space
 imgpoints = [] # 2d points in image plane.
 
-images = glob.glob('images/*.jpg')
+images = sorted(os.path.join(IMAGE_DIR, f) for f in os.listdir(IMAGE_DIR) if f.endswith('.jpg'))
 
 for fname in images:
     img = cv.imread(fname)
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
     # Find the chess board corners
-    ret, corners = cv.findChessboardCorners(gray, (7,10), None)
+    ret, corners = cv.findChessboardCorners(gray, (ROWS,COLS), None)
     print(ret)
 
     # If found, add object points, image points (after refining them)
@@ -43,7 +37,7 @@ for fname in images:
         imgpoints.append(corners2)
 
         # Draw and display the corners
-        cv.drawChessboardCorners(img, (7,10), corners2, ret)
+        cv.drawChessboardCorners(img, (ROWS,COLS), corners2, ret)
         cv.imshow('img', img)
         cv.waitKey(500)
 
@@ -54,9 +48,10 @@ if len(objpoints) < 10:
 
 ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
 
-#saves images to a .npz file
+#saves calibration next to this file
 h,  w = img.shape[:2]
-np.savez('images', mtx=mtx, dist=dist, width=w, height=h)
+np.savez(OUT_PATH, mtx=mtx, dist=dist, width=w, height=h)
+print(f'saved {OUT_PATH}')
 
 # img = cv.imread('images/calib.jpg')
 # h,  w = img.shape[:2]

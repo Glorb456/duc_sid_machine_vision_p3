@@ -74,7 +74,7 @@ GOAL_TAG_FAMILY = cv2.aruco.DICT_APRILTAG_36h11
 # (matches apriltag_viewer.py's own default) -- measure the team's actual
 # printed tag before trusting the distance this produces. Getting this
 # wrong scales the estimated distance to the goal by the same factor.
-GOAL_TAG_SIZE_M = 0.1
+GOAL_TAG_SIZE_M = 0.075
 
 STANDOFF_DISTANCE = 0.35  # meters behind the ball to line up before striking
 SETUP_POSITION_TOLERANCE = 0.1  # meters, "close enough" to the setup point
@@ -176,8 +176,10 @@ class BallPursuitNode(Node):
         # convert to a world-frame position using the robot's pose right now
         # and lock it in for good. See the module docstring for why this is
         # a one-time, never-recomputed estimate rather than a running one.
+        # `bearing` is positive when the ball is RIGHT of image center, but
+        # robot-frame +y points LEFT, so the y component is negated.
         ball_x_robot = distance * math.cos(bearing)
-        ball_y_robot = distance * math.sin(bearing)
+        ball_y_robot = -distance * math.sin(bearing)
         self.locked_ball_xy = self._project_to_world(ball_x_robot, ball_y_robot, rx, ry, ryaw)
 
     def _find_goal_tag(self, frame, rx, ry, ryaw):
@@ -210,14 +212,12 @@ class BallPursuitNode(Node):
                 continue
 
             t = tvec.ravel()
-            # z (depth) -> robot-frame forward, same as the ball's distance.
-            # x (camera-right) is used UNINVERTED on purpose: the ball's own
-            # bearing estimate below also leaves image-rightward positive
-            # (pixel_offset = center_x - width/2, then sin(bearing)), so
-            # this matches that same convention. Flipping just one of the
-            # two would put the ball and the goal in mirrored halves of the
-            # same "world" frame.
-            goal_x_robot, goal_y_robot = float(t[2]), float(t[0])
+            # OpenCV camera frame: x right, y down, z forward.
+            # Robot frame: x forward, y left. So camera z -> robot x, and
+            # camera x -> robot -y. The ball's y is negated the same way in
+            # _find_ball, so both land on their true sides, not just on
+            # consistent sides relative to each other.
+            goal_x_robot, goal_y_robot = float(t[2]), -float(t[0])
             self.locked_goal_xy = self._project_to_world(goal_x_robot, goal_y_robot, rx, ry, ryaw)
             return
 
