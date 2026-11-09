@@ -8,8 +8,9 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, Pose2D, Point
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
-from ament_index_python.packages import get_package_share_directory
-path = os.path.join(get_package_share_directory('machine_vision_pkg'), 'config', 'calibration.npz')
+
+# calibration.npz lives in the same folder as this file (written by calibration_demo.py)
+CALIB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'calibration.npz')
 
 
 class localization_node(Node):
@@ -19,8 +20,6 @@ class localization_node(Node):
         super().__init__('localization_node')
         self.bridge = CvBridge()
         self.detector = apriltag.Detector(apriltag.DetectorOptions(families="tag36h11"))
-
-        # TODO add path to file saved by calibration_demo.py
 
 
 
@@ -45,7 +44,7 @@ class localization_node(Node):
         }
 
         #loads calibration
-        calib = np.load('calibration.npz')
+        calib = np.load(CALIB_PATH)
         mtx = calib['mtx']
         self.camera_params = (mtx[0,0], mtx[1,1], mtx[0,2], mtx[1,2])
 

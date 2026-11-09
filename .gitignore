@@ -1,0 +1,12 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# colcon output (if ever built from inside the repo)
+build/
+install/
+log/
+
+# calibration_demo.py undistort preview output
+calibresult.png

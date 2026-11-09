@@ -75,12 +75,10 @@ CAMERA_FOCAL_LENGTH_PX = 610.18 # TODO make this pull from calibration or other 
 # TAG_POSITIONS: 0-3 are field corners, 4 and 5 are the two goals).
 GOAL_TAG_ID = 4
 GOAL_TAG_FAMILY = cv2.aruco.DICT_APRILTAG_36h11
-# Default edge length of the tag's black square, in meters -- a placeholder
-# (matches apriltag_viewer.py's own default) that's overridden by the
-# goal_tag_size param below. Measure the team's actual printed tag before
-# trusting the distance this produces: getting it wrong scales the
-# estimated distance to the goal by that same factor.
-DEFAULT_GOAL_TAG_SIZE_M = 0.1
+# Default edge length of the tag's black square, in meters -- overridable
+# via the goal_tag_size param below without a rebuild. 0.075 is Sid's
+# measurement of the team's actual printed tag.
+DEFAULT_GOAL_TAG_SIZE_M = 0.075
 
 STANDOFF_DISTANCE = 0.35  # meters behind the ball to line up before striking
 SETUP_POSITION_TOLERANCE = 0.1  # meters, "close enough" to the setup point
@@ -191,6 +189,8 @@ class BallPursuitNode(Node):
         # convert to a world-frame position using the robot's pose right now
         # and lock it in for good. See the module docstring for why this is
         # a one-time, never-recomputed estimate rather than a running one.
+        # `bearing` is positive when the ball is RIGHT of image center, but
+        # robot-frame +y points LEFT, so the y component is negated.
         ball_x_robot = distance * math.cos(bearing)
         # NEGATED: pixel_offset/bearing positive means the ball is on the
         # RIGHT side of the image, which is the robot's physical right --
@@ -199,7 +199,8 @@ class BallPursuitNode(Node):
         # sim test: an unnegated version locked a ball that was physically
         # placed at y=+0.6 to world y=-0.51 (sign-flipped) -- invisible in
         # all earlier dead-ahead (y=0) testing, where a flipped zero is
-        # still zero.
+        # still zero. (Sid independently hit the same mirrored-driving bug
+        # on real hardware and fixed it the same way.)
         ball_y_robot = -distance * math.sin(bearing)
         candidate_xy = self._project_to_world(ball_x_robot, ball_y_robot, rx, ry, ryaw)
 
