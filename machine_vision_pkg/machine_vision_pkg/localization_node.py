@@ -5,8 +5,10 @@ import cv2
 import apriltag
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
 from geometry_msgs.msg import Twist, Pose2D, Point
 from sensor_msgs.msg import Image
+from std_msgs.msg import Bool
 from cv_bridge import CvBridge
 
 # calibration.npz lives in the same folder as this file (written by calibration_demo.py)
@@ -23,11 +25,16 @@ class localization_node(Node):
 
 
 
-        #measured parameters in ft, need to translate to meters
-        self.FIELD_SIZE = 4.0
-        self.TAG_SIZE = 0.246063
-        self.TAG_HEIGHT = 0.2083333
-        self.CAMERA_HEIGHT = 0.875
+        #measured parameters, all in meters 
+        self.FIELD_SIZE = 1.8288      # 6 ft
+        self.TAG_SIZE = 0.075
+        self.TAG_HEIGHT = 0.0635
+        self.CAMERA_HEIGHT = 0.2667
+
+        #boost: if within BOOST_RADIUS of field center, robot may speed up for BOOST_TIME
+        self.CENTER = self.FIELD_SIZE / 2
+        self.BOOST_RADIUS = 0.10
+        self.BOOST_TIME = Duration(seconds=3.0)
 
         #tag dict
         self.TAG_POSITIONS = {
@@ -56,8 +63,9 @@ class localization_node(Node):
 
         self.create_subscription(Image, '/camera/image_raw', self.process_image, 10)
         # self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.publisher_ = self.create_publisher(Vector3, 'pose', 10) #need to publish x,y,theta, this is probably wrong
-        self.timer = self.create_timer(1.0, self.timer_callback)
+        self.pose_pub = self.create_publisher(Pose2D, 'pose', 10)
+        # True while the robot is allowed to drive faster
+        self.boost_pub = self.create_publisher(Bool, 'boost', 10)
 
 
     def process_image(self, msg):
@@ -67,7 +75,8 @@ class localization_node(Node):
         if detections:
             self.estimate_location(detections)
             self.pose_pub.publish(self.pose)
-        self.is_on_boost()
+            self.is_on_boost()
+        self.boost_pub.publish(Bool(data=self.boosting()))
         self.ball_out_of_field()
 
         # cv2.imshow('camera', self.cv_image)
@@ -96,12 +105,41 @@ class localization_node(Node):
                 
 
     def estimate_location(self, detections):
-        # TODO 4 april tags are in each corner of field, 1 april tag per goal. field is a square
-        pass
+        # 4 april tags are in each corner of field, 1 april tag per goal. field is a square.
+        #uses one tag assuming all point to center
+        poses = [(d.tag_id, self.detector.detection_pose(d, self.camera_params, self.TAG_SIZE)[0])
+                 for d in detections]
+        tag_id, pose = min(poses, key=lambda p: np.linalg.norm(p[1][:3, 3]))
+
+        t = pose[:3, 3]        # tag position in camera frame (x right, y down, z forward)
+        normal = pose[:3, 2]   # tag's z axis in camera frame
+        if np.dot(normal, t) > 0:
+            normal = -normal   # make it point out of the tag face, toward the camera
+
+        # robot frame is (forward, left) = (cam z, -cam x)
+        dist = self.ground_dist(t)
+        bearing = math.atan2(-t[0], t[2])                 # direction to the tag, relative to robot heading
+        tag_facing_rel = math.atan2(-normal[0], normal[2])  # direction the tag faces, relative to robot heading
+
+        # we know which way the tag faces on the field, so that gives us the robot's heading
+        tag_x, tag_y = self.TAG_POSITIONS[tag_id]
+        tag_facing = math.atan2(self.CENTER - tag_y, self.CENTER - tag_x)
+        theta = tag_facing - tag_facing_rel
+
+        # step back from the tag along the line of sight
+        self.pose.x = tag_x - dist * math.cos(theta + bearing)
+        self.pose.y = tag_y - dist * math.sin(theta + bearing)
+        self.pose.theta = math.atan2(math.sin(theta), math.cos(theta))
+
+    def boosting(self):
+        return self.boost_until is not None and self.get_clock().now() < self.boost_until
 
     def is_on_boost(self):
-        # TODO if the robot is on the center of the map, double the speed for 3 seconds
-        pass
+        # if the robot thinks it is within 10cm of the center, allow it to speed up for 3 seconds
+        dist_to_center = math.hypot(self.pose.x - self.CENTER, self.pose.y - self.CENTER)
+        if dist_to_center < self.BOOST_RADIUS and not self.boosting():
+            self.boost_until = self.get_clock().now() + self.BOOST_TIME
+            self.get_logger().info('at center, boosting for 3 s')
 
     def ball_out_of_field(self):
         #TODO if neato thinks ball is outside of field, spin around in a circle and keep verifying surroundings until it is back in
