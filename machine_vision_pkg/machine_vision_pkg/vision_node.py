@@ -82,7 +82,11 @@ DEFAULT_GOAL_TAG_SIZE_M = 0.075
 
 STANDOFF_DISTANCE = 0.35  # meters behind the ball to line up before striking
 SETUP_POSITION_TOLERANCE = 0.1  # meters, "close enough" to the setup point
-SETUP_HEADING_TOLERANCE = 0.15  # radians, "facing the right way" before striking
+# radians, "facing the right way" before striking. Tightened from an
+# earlier 0.15 (~8.6 deg): that was loose enough that the ball could
+# visibly miss the target by several tens of centimeters over a few
+# meters of push, confirmed in sim testing.
+SETUP_HEADING_TOLERANCE = 0.05
 # a strike's length is based on how far the ball still needs to go (see
 # where STRIKE starts, below), clamped to this range. A fixed-length
 # shove massively overshot a light ball in testing: it needs to taper
@@ -326,7 +330,11 @@ class BallPursuitNode(Node):
             elapsed = (self.get_clock().now() - self.strike_start_time).nanoseconds / 1e9
             if elapsed < self.strike_duration:
                 cmd.linear.x = MAX_LINEAR_SPEED
-                cmd.angular.z = 0.3 * strike_heading_error
+                # Actively steer toward push_heading during the push itself
+                # instead of just coasting on whatever heading SETUP ended
+                # on. Gain raised from an earlier 0.3, which let the ball
+                # drift noticeably off-line over a multi-meter push.
+                cmd.angular.z = 0.8 * strike_heading_error
             else:
                 self.state = 'SEARCH'
                 self.locked_ball_xy = None  # struck it; look for a new ball next
