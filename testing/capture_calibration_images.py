@@ -1,17 +1,9 @@
-"""Live viewer for /camera/image_raw that saves frames for camera calibration.
-
-Run directly (no colcon build needed):
-    python3 capture_calibration_images.py            # saves to ./images next to this file
-    python3 capture_calibration_images.py --count 15 --out /some/dir
-
-Keys (with the OpenCV window focused):
-    SPACE  save the current frame (only if the chessboard is detected, unless --force)
-    f      save the current frame even if the board isn't detected
-    q/ESC  quit
-
-The preview draws detected corners so you can tell whether a pose will be usable.
-Saved images are the raw, un-annotated frames.
-"""
+""" Live viewer for /camera/image_raw that saves raw frames for camera calibration.
+    usage: python3 capture_calibration_images.py [--count 15] [--out /some/dir]
+    keys:
+        SPACE: save the current frame if the chessboard is detected
+        f: save the current frame even if the board isn't detected
+        q/ESC: quit """
 import argparse
 import os
 

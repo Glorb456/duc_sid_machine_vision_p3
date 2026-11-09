@@ -1,8 +1,6 @@
-"""Temporary demo: overlay everything we know about AprilTags seen by the Neato camera.
-
-Run:  python3 apriltag_viewer.py [--family 36h11] [--tag-size 0.1] [--calib calib.npz]
-Press q in the window to quit.
-"""
+""" Overlays AprilTag detections and pose estimates on the Neato camera feed.
+    usage: python3 apriltag_viewer.py [--family 36h11] [--tag-size 0.1] [--calib calib.npz]
+    press q in the window to quit. """
 import argparse
 import time
 
@@ -46,7 +44,7 @@ class AprilTagViewer(Node):
         self.create_subscription(CameraInfo, '/camera/camera_info', self.on_info, 10)
 
     def on_info(self, msg):
-        # The Neato publishes an all-zero CameraInfo when uncalibrated, so only trust a real K.
+        # the Neato publishes an all-zero CameraInfo when uncalibrated
         if self.calib_source != 'file' and msg.k[0] > 0:
             self.K = np.array(msg.k).reshape(3, 3)
             self.D = np.array(msg.d) if len(msg.d) else np.zeros(5)
@@ -57,13 +55,15 @@ class AprilTagViewer(Node):
         self.last_frame_time = time.monotonic()
 
     def intrinsics(self, w, h):
+        """ Return (K, D, source) for the camera, falling back to a pinhole guess
+            from the assumed horizontal FOV if there is no calibration """
         if self.K is not None:
             return self.K, self.D, self.calib_source
-        # No calibration: pinhole guess from the assumed horizontal FOV.
         f = (w / 2) / np.tan(self.hfov / 2)
         return np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]]), np.zeros(5), 'approx'
 
     def annotate(self, img):
+        """ Draw each detected tag's outline, id, axes and pose onto img, plus an info panel """
         h, w = img.shape[:2]
         K, D, src = self.intrinsics(w, h)
         gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
@@ -81,7 +81,6 @@ class AprilTagViewer(Node):
             top = pts[1] - pts[0]
             spin = np.degrees(np.arctan2(top[1], top[0]))
 
-            # Outline, corner order, center, id label
             cv.polylines(img, [pts.astype(int)], True, (0, 255, 0), 2)
             for i, (p, col) in enumerate(zip(pts, [(0, 0, 255), (0, 255, 255), (255, 0, 0), (255, 0, 255)])):
                 cv.circle(img, tuple(p.astype(int)), 4, col, -1)
@@ -106,7 +105,6 @@ class AprilTagViewer(Node):
                 panel.append(f'    xyz=({t[0]:+.2f},{t[1]:+.2f},{t[2]:+.2f})m  dist={np.linalg.norm(t):.2f}m  '
                              f'bearing={bearing:+.0f}deg  rpy=({roll:+.0f},{pitch:+.0f},{yaw:+.0f})deg')
 
-        # Semi-transparent info panel in the top-left
         line_h = 16
         overlay = img.copy()
         width = max(cv.getTextSize(l, cv.FONT_HERSHEY_SIMPLEX, 0.42, 1)[0][0] for l in panel) + 12
