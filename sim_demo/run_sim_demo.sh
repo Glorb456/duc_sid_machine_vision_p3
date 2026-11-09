@@ -19,7 +19,7 @@ source "$WS/install/setup.bash"
 export ROS_DOMAIN_ID=23
 
 echo "== cleaning up any previous sim =="
-for pat in "lib/machine_vision_pkg/vision_node" "gz sim" "parameter_bridge" "robot_state_publisher" "scan_to_pc2" "simulator_adapter"; do
+for pat in "lib/machine_vision_pkg/ball_pursuit_node" "gz sim" "parameter_bridge" "robot_state_publisher" "scan_to_pc2" "simulator_adapter"; do
   pids=$(pgrep -f "$pat" || true)
   [ -n "$pids" ] && kill $pids 2>/dev/null || true
 done
@@ -158,8 +158,8 @@ gz service -s /world/default/create --reqtype gz.msgs.EntityFactory --reptype gz
 
 sleep 1
 
-echo "== starting vision_node =="
-ros2 run machine_vision_pkg vision_node --ros-args \
+echo "== starting ball_pursuit_node =="
+ros2 run machine_vision_pkg ball_pursuit_node --ros-args \
   -r camera/image_raw:=/camera/image \
   -p goal_tag_size:=0.2 \
   -p use_sim_time:=true

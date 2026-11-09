@@ -16,6 +16,33 @@ from machine_vision_pkg import field_config
 # calibration.npz lives in the same folder as this file (written by calibration_demo.py)
 CALIB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'calibration.npz')
 
+# estimate_location() computes a fresh pose from a single tag reading each
+# call, with no memory of the last one. Normally harmless, but when the
+# robot is positioned where two different tags are both the "nearest" one
+# on alternating frames, each tag's independent estimate disagrees with the
+# other's by a nontrivial amount -- confirmed in testing: a stationary
+# robot's reported y swung over a meter, back and forth, frame to frame.
+#
+# Fix: exponential smoothing. Every new candidate pose is blended with the
+# last published one instead of replacing it outright, so two sources that
+# disagree converge toward something near their average with a damped
+# oscillation, rather than the output swinging all the way to whichever one
+# was read most recently. (A first attempt used "hold back a jump until it's
+# confirmed by N consecutive agreeing frames" -- that turned out too weak:
+# whichever tag happens to stay nearest for just 2 frames in a row, often
+# under 0.2s, got waved through as "confirmed," which barely filtered
+# anything. Smoothing has no such gap: it always updates, just by a damped
+# amount, so it can't be fooled by a short run of one tag's bias, and it
+# can't deadlock the way a reject-and-wait scheme can if nothing ever
+# re-confirms.)
+POSE_SMOOTHING_ALPHA = 0.15  # weight on each new reading; lower = steadier but slower to track real motion
+
+
+def angle_diff(a, b):
+    """Smallest signed difference a - b, wrapped to [-pi, pi]."""
+    d = a - b
+    return math.atan2(math.sin(d), math.cos(d))
+
 
 class localization_node(Node):
 
@@ -27,7 +54,7 @@ class localization_node(Node):
 
 
 
-        #measured parameters, all in meters -- shared with vision_node.py via
+        #measured parameters, all in meters -- shared with ball_pursuit_node.py via
         #field_config.py so the two nodes can't silently disagree about the field
         self.FIELD_SIZE = field_config.FIELD_SIZE
         self.TAG_SIZE = field_config.TAG_SIZE
@@ -51,6 +78,9 @@ class localization_node(Node):
         self.pose = Pose2D()
         self.ball = None
         self.boost_until = None
+
+        # pose smoothing -- see POSE_SMOOTHING_ALPHA above
+        self._have_pose = False
 
 
         self.create_subscription(Image, '/camera/image_raw', self.process_image, 10)
@@ -119,9 +149,26 @@ class localization_node(Node):
         theta = tag_facing - tag_facing_rel
 
         # step back from the tag along the line of sight
-        self.pose.x = tag_x - dist * math.cos(theta + bearing)
-        self.pose.y = tag_y - dist * math.sin(theta + bearing)
-        self.pose.theta = math.atan2(math.sin(theta), math.cos(theta))
+        candidate_x = tag_x - dist * math.cos(theta + bearing)
+        candidate_y = tag_y - dist * math.sin(theta + bearing)
+        candidate_theta = math.atan2(math.sin(theta), math.cos(theta))
+        self._smooth_pose(candidate_x, candidate_y, candidate_theta)
+
+    def _smooth_pose(self, x, y, theta):
+        """Blend (x, y, theta) into self.pose instead of replacing it outright
+        -- see POSE_SMOOTHING_ALPHA above for why."""
+        if self._have_pose:
+            a = POSE_SMOOTHING_ALPHA
+            self.pose.x += a * (x - self.pose.x)
+            self.pose.y += a * (y - self.pose.y)
+            self.pose.theta += a * angle_diff(theta, self.pose.theta)
+            self.pose.theta = math.atan2(math.sin(self.pose.theta), math.cos(self.pose.theta))
+        else:
+            # first-ever reading: no prior estimate to blend with, just take it
+            self.pose.x = x
+            self.pose.y = y
+            self.pose.theta = theta
+            self._have_pose = True
 
     def boosting(self):
         return self.boost_until is not None and self.get_clock().now() < self.boost_until
