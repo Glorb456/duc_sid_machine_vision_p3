@@ -52,6 +52,11 @@ from sensor_msgs.msg import Image
 BALL_HSV_LOWER = (5, 150, 100)
 BALL_HSV_UPPER = (20, 255, 255)
 MIN_BALL_CONTOUR_AREA = 50  # pixels, filters out color-matching noise
+# A ball detection only gets locked in once two consecutive frames agree
+# (within this many meters) on where it is -- guards against a single
+# spurious HSV-match frame getting locked in permanently.
+BALL_CONFIRM_TOLERANCE = 0.3
+BALL_CONFIRM_FRAMES = 2
 
 # distance_m = BALL_SIZE_CALIBRATION / apparent_radius_px
 # Measured in the sim: ball at a true camera distance of 1.3m (0.1m
@@ -70,11 +75,12 @@ CAMERA_FOCAL_LENGTH_PX = 610.18 # TODO make this pull from calibration or other 
 # TAG_POSITIONS: 0-3 are field corners, 4 and 5 are the two goals).
 GOAL_TAG_ID = 4
 GOAL_TAG_FAMILY = cv2.aruco.DICT_APRILTAG_36h11
-# Edge length of the tag's black square, in meters. 0.1 is a placeholder
-# (matches apriltag_viewer.py's own default) -- measure the team's actual
-# printed tag before trusting the distance this produces. Getting this
-# wrong scales the estimated distance to the goal by the same factor.
-GOAL_TAG_SIZE_M = 0.1
+# Default edge length of the tag's black square, in meters -- a placeholder
+# (matches apriltag_viewer.py's own default) that's overridden by the
+# goal_tag_size param below. Measure the team's actual printed tag before
+# trusting the distance this produces: getting it wrong scales the
+# estimated distance to the goal by that same factor.
+DEFAULT_GOAL_TAG_SIZE_M = 0.1
 
 STANDOFF_DISTANCE = 0.35  # meters behind the ball to line up before striking
 SETUP_POSITION_TOLERANCE = 0.1  # meters, "close enough" to the setup point
@@ -119,6 +125,8 @@ class BallPursuitNode(Node):
         # adjust this by feel once testing against the real goal.
         self.declare_parameter('goal_area_radius', 0.5)
         self.goal_area_radius = self.get_parameter('goal_area_radius').value
+        self.declare_parameter('goal_tag_size', DEFAULT_GOAL_TAG_SIZE_M)
+        self.goal_tag_size = self.get_parameter('goal_tag_size').value
 
         self.bridge = CvBridge()
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
@@ -134,6 +142,13 @@ class BallPursuitNode(Node):
         self.robot_pose = None  # (x, y, yaw) in odom frame
         self.locked_ball_xy = None  # (x, y) in odom frame, set once and never recomputed
         self.locked_goal_xy = None  # (x, y) in odom frame, from AprilTag #4; overrides target_xy once found
+        # A single spurious HSV-match frame (sensor noise, a stray
+        # reflection) would otherwise get locked in permanently and the
+        # robot would chase a phantom for the rest of the run -- confirmed
+        # happening in sim testing. Require two consecutive detections
+        # that roughly agree before committing to a lock.
+        self._ball_candidate_xy = None
+        self._ball_candidate_hits = 0
 
         self.state = 'SEARCH'
         self.strike_start_time = None
@@ -177,8 +192,27 @@ class BallPursuitNode(Node):
         # and lock it in for good. See the module docstring for why this is
         # a one-time, never-recomputed estimate rather than a running one.
         ball_x_robot = distance * math.cos(bearing)
-        ball_y_robot = distance * math.sin(bearing)
-        self.locked_ball_xy = self._project_to_world(ball_x_robot, ball_y_robot, rx, ry, ryaw)
+        # NEGATED: pixel_offset/bearing positive means the ball is on the
+        # RIGHT side of the image, which is the robot's physical right --
+        # i.e. NEGATIVE y in the standard x-forward/y-left robot frame that
+        # _project_to_world's rotation assumes. Confirmed via an off-axis
+        # sim test: an unnegated version locked a ball that was physically
+        # placed at y=+0.6 to world y=-0.51 (sign-flipped) -- invisible in
+        # all earlier dead-ahead (y=0) testing, where a flipped zero is
+        # still zero.
+        ball_y_robot = -distance * math.sin(bearing)
+        candidate_xy = self._project_to_world(ball_x_robot, ball_y_robot, rx, ry, ryaw)
+
+        if (self._ball_candidate_xy is not None
+                and math.hypot(candidate_xy[0] - self._ball_candidate_xy[0],
+                                candidate_xy[1] - self._ball_candidate_xy[1]) < BALL_CONFIRM_TOLERANCE):
+            self._ball_candidate_hits += 1
+        else:
+            self._ball_candidate_xy = candidate_xy
+            self._ball_candidate_hits = 1
+
+        if self._ball_candidate_hits >= BALL_CONFIRM_FRAMES:
+            self.locked_ball_xy = candidate_xy
 
     def _find_goal_tag(self, frame, rx, ry, ryaw):
         image_height, image_width = frame.shape[:2]
@@ -194,7 +228,7 @@ class BallPursuitNode(Node):
             # Full PnP pose solve (not the ball's apparent-size heuristic):
             # we know the tag's real size, so this gives both bearing and
             # distance directly from the tag's camera-frame translation.
-            half = GOAL_TAG_SIZE_M / 2.0
+            half = self.goal_tag_size / 2.0
             obj_pts = np.array(
                 [[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]],
                 dtype=np.float32)
@@ -211,13 +245,12 @@ class BallPursuitNode(Node):
 
             t = tvec.ravel()
             # z (depth) -> robot-frame forward, same as the ball's distance.
-            # x (camera-right) is used UNINVERTED on purpose: the ball's own
-            # bearing estimate below also leaves image-rightward positive
-            # (pixel_offset = center_x - width/2, then sin(bearing)), so
-            # this matches that same convention. Flipping just one of the
-            # two would put the ball and the goal in mirrored halves of the
-            # same "world" frame.
-            goal_x_robot, goal_y_robot = float(t[2]), float(t[0])
+            # x (camera-right, positive) -> robot-frame y is NEGATED: image/
+            # camera-rightward is the robot's physical right, which is
+            # NEGATIVE y in the standard x-forward/y-left robot frame that
+            # _project_to_world's rotation assumes. Matches the ball's own
+            # (also negated) bearing-to-lateral conversion above.
+            goal_x_robot, goal_y_robot = float(t[2]), -float(t[0])
             self.locked_goal_xy = self._project_to_world(goal_x_robot, goal_y_robot, rx, ry, ryaw)
             return
 
@@ -300,11 +333,23 @@ class BallPursuitNode(Node):
                 cmd.angular.z = 0.0
         else:
             self.state = 'SETUP'
-            cmd.angular.z = max(-MAX_ANGULAR_SPEED, min(MAX_ANGULAR_SPEED, 1.5 * heading_error))
-            # don't drive forward until mostly facing the setup point, or
-            # we'll arc straight through the ball on the way there
-            if abs(heading_error) < 0.5:
-                cmd.linear.x = max(0.0, min(MAX_LINEAR_SPEED, 0.5 * distance_to_setup))
+            if distance_to_setup < SETUP_POSITION_TOLERANCE:
+                # Close enough to the setup point that heading_to_setup (the
+                # bearing TO that point) is near-degenerate -- standing
+                # right on top of a point gives almost no signal about
+                # which way it "is". Pivot to face the strike heading
+                # instead, which stays well-defined regardless of position.
+                # Without this, a robot that arrives at the setup point
+                # facing the wrong way has nothing to correct against and
+                # parks there permanently (confirmed in sim testing).
+                cmd.angular.z = max(
+                    -MAX_ANGULAR_SPEED, min(MAX_ANGULAR_SPEED, 1.5 * strike_heading_error))
+            else:
+                cmd.angular.z = max(-MAX_ANGULAR_SPEED, min(MAX_ANGULAR_SPEED, 1.5 * heading_error))
+                # don't drive forward until mostly facing the setup point,
+                # or we'll arc straight through the ball on the way there
+                if abs(heading_error) < 0.5:
+                    cmd.linear.x = max(0.0, min(MAX_LINEAR_SPEED, 0.5 * distance_to_setup))
 
         self.cmd_pub.publish(cmd)
 
