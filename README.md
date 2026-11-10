@@ -12,7 +12,7 @@ We wanted to implement three main functions in our project:
 
 The catch: EVERYTHING must be implemented with a single camera sensor mounted on the front of the robot. No lidar or odometry.
 
-
+In our setup, Duc primarily worked on the ball striking mechanics while Siddhant worked on localizing the robot in the field through apriltags.
 
 ## How did we solve this problem?
 Our project can essentially be broken down into two sections: Using apriltags placed around the field to determine an x, y, $\theta$ pose in our map frame, and identifying a "goal" area and kicking the ball into it. 

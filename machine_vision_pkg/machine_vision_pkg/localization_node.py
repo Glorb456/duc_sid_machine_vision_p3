@@ -64,6 +64,7 @@ class localization_node(Node):
         self.create_subscription(Image, '/camera/image_raw', self.process_image, 10)
         self.pose_pub = self.create_publisher(Pose2D, 'pose', 10)
         self.boost_pub = self.create_publisher(Bool, 'boost', 10)
+        self.get_logger().info('Localization started')
 
 
     def process_image(self, msg):
@@ -140,6 +141,7 @@ class localization_node(Node):
             self.pose.y = y
             self.pose.theta = theta
             self._have_pose = True
+            self.get_logger().info('First pose acquired')
 
     def boosting(self):
         return self.boost_until is not None and self.get_clock().now() < self.boost_until

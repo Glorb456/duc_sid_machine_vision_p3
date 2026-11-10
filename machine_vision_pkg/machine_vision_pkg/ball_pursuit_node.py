@@ -124,6 +124,7 @@ class BallPursuitNode(Node):
 
         if self._ball_candidate_hits >= BALL_CONFIRM_FRAMES:
             self.locked_ball_xy = candidate_xy
+            self.get_logger().info('Ball locked')
 
     def image_callback(self, msg):
         if self.robot_pose is None or self.locked_ball_xy is not None:
@@ -184,6 +185,7 @@ class BallPursuitNode(Node):
                 MIN_STRIKE_DURATION_SEC,
                 min(MAX_STRIKE_DURATION_SEC, push_dist / MAX_LINEAR_SPEED),
             )
+            self.get_logger().info('Striking')
 
         if self.state == 'STRIKE':
             elapsed = (self.get_clock().now() - self.strike_start_time).nanoseconds / 1e9
@@ -193,6 +195,7 @@ class BallPursuitNode(Node):
             else:
                 self.state = 'SEARCH'
                 self.locked_ball_xy = None  # struck it, look for a new ball next
+                self.get_logger().info('Strike done, searching')
                 cmd.linear.x = 0.0
                 cmd.angular.z = 0.0
         else:
