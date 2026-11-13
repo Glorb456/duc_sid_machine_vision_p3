@@ -77,3 +77,7 @@ Optional: view live AprilTag detections:
 ```bash
 ros2 run machine_vision_pkg apriltag_viewer
 ```
+
+AI disclosure:
+Code double checked and finalized by AI, all root code conceptualized and written by us. Also helped with debugging hardware.
+Example prompt: The robot is not connecting. What could be a possible issue?
